@@ -26,7 +26,7 @@ def load_corpus(filepath="data/climate_articles.csv"):
         DataFrame with columns: id, text, source, language, category.
     """
     # TODO: Load the CSV and return the DataFrame unchanged
-    pass
+    return  pd.read_csv(filepath)
 
 
 def preprocess_corpus(df):
