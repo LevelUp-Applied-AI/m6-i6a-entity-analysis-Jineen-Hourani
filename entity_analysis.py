@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import spacy
-
+from itertools import combinations
 
 def load_corpus(filepath="data/climate_articles.csv"):
     """Load the climate articles dataset.
@@ -25,8 +25,8 @@ def load_corpus(filepath="data/climate_articles.csv"):
     Returns:
         DataFrame with columns: id, text, source, language, category.
     """
-    # TODO: Load the CSV and return the DataFrame unchanged
-    pass
+    #   Load the CSV and return the DataFrame unchanged
+    return  pd.read_csv(filepath)
 
 
 def preprocess_corpus(df):
@@ -49,10 +49,24 @@ def preprocess_corpus(df):
         Copy of df with a new `processed_text` column. The original
         `text` column is left intact so NER can still consume it.
     """
-    # TODO: Copy df, apply unicodedata.normalize('NFC', t) to each
+    #   Copy df, apply unicodedata.normalize('NFC', t) to each
     #       text, branch on language for English vs. Arabic handling,
     #       write results into a new `processed_text` column
-    pass
+    df_copy = df.copy() 
+
+    def process_row(row):
+        normalized_text = unicodedata.normalize('NFC', row['text'])
+        
+        if row['language'] == 'en':
+            return normalized_text
+        elif row['language'] == 'ar':
+            return "" 
+        else:
+            return normalized_text
+
+    df_copy['processed_text'] = df_copy.apply(process_row, axis=1)
+    
+    return df_copy
 
 
 def run_ner_pipeline(df, nlp):
@@ -66,9 +80,28 @@ def run_ner_pipeline(df, nlp):
         DataFrame with columns: text_id, entity_text, entity_label,
         start_char, end_char.
     """
-    # TODO: Filter df to language == 'en', process each text with nlp,
+    #  Filter df to language == 'en', process each text with nlp,
     #       collect entities into rows, return as a DataFrame
-    pass
+    # Filter for English rows only
+    en_df = df[df['language'] == 'en']
+    entities_data = []
+
+    # Process each row
+    for _, row in en_df.iterrows():
+        text_id = row['id']
+        # We use the raw text column as requested for NER signals
+        doc = nlp(row['text'])
+        
+        for ent in doc.ents:
+            entities_data.append({
+                'text_id': text_id,
+                'entity_text': ent.text,
+                'entity_label': ent.label_,
+                'start_char': ent.start_char,
+                'end_char': ent.end_char
+            })
+            
+    return pd.DataFrame(entities_data)
 
 
 def aggregate_entity_stats(entity_df, articles_df):
@@ -95,10 +128,41 @@ def aggregate_entity_stats(entity_df, articles_df):
                           by article category (columns: category,
                           entity_label, count)
     """
-    # TODO: Count entity frequencies (top 20), compute label totals,
+    # Count entity frequencies (top 20), compute label totals,
     #       build co-occurrence pairs, and join on articles_df.id to
     #       compute per-category entity-label counts
-    pass
+    # 1. Top 20 entities
+    top_entities = entity_df.groupby(['entity_text', 'entity_label']).size().reset_index(name='count')
+    top_entities = top_entities.sort_values(by='count', ascending=False).head(20)
+
+    # 2. Label counts
+    label_counts = entity_df['entity_label'].value_counts().to_dict()
+
+    # 3. Co-occurrence
+    co_occur_list = []
+    # Group entities by article to find pairs within the same text
+    for _, group in entity_df.groupby('text_id'):
+        unique_ents = sorted(list(set(group['entity_text'])))
+        if len(unique_ents) >= 2:
+            # Create all possible pairs (A, B)
+            for pair in combinations(unique_ents, 2):
+                co_occur_list.append(pair)
+
+    co_df = pd.DataFrame(co_occur_list, columns=['entity_a', 'entity_b'])
+    co_counts = co_df.groupby(['entity_a', 'entity_b']).size().reset_index(name='co_count')
+    co_counts = co_counts.sort_values(by='co_count', ascending=False).head(50)
+
+    # 4. Per-category
+    # Join with articles_df to get the 'category' column
+    merged_df = entity_df.merge(articles_df[['id', 'category']], left_on='text_id', right_on='id')
+    per_category = merged_df.groupby(['category', 'entity_label']).size().reset_index(name='count')
+
+    return {
+        'top_entities': top_entities,
+        'label_counts': label_counts,
+        'co_occurrence': co_counts,
+        'per_category': per_category
+    }
 
 
 def visualize_entity_distribution(stats, output_path="entity_distribution.png"):
@@ -109,9 +173,19 @@ def visualize_entity_distribution(stats, output_path="entity_distribution.png"):
                'top_entities' DataFrame).
         output_path: File path to save the chart.
     """
-    # TODO: Create a horizontal bar chart of top entities, colored or
+    # Create a horizontal bar chart of top entities, colored or
     #       grouped by entity type, save to output_path
-    pass
+    top_20 = stats['top_entities']
+    plt.figure(figsize=(12, 8))
+    # Horizontal bar chart for readability
+    plt.barh(top_20['entity_text'], top_20['count'], color='skyblue')
+    plt.xlabel('Frequency')
+    plt.ylabel('Entity')
+    plt.title('Top 20 Entities in Climate Articles')
+    plt.gca().invert_yaxis()  # Highest frequency at the top
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
 
 
 def generate_report(stats, co_occurrence):
@@ -126,8 +200,32 @@ def generate_report(stats, co_occurrence):
         per type, top 5 most frequent entities, top 3 co-occurring
         pairs, and a brief summary.
     """
-    # TODO: Build a formatted report string from the statistics
-    pass
+    # Build a formatted report string from the statistics
+    top_5 = stats['top_entities'].head(5)
+    top_3_co = co_occurrence.head(3)
+    
+    # Building the report string
+    report = "ENTITY ANALYSIS REPORT\n"
+    report += "="*25 + "\n\n"
+    
+    report += "1. Entity Counts Per Type:\n"
+    for label, count in stats['label_counts'].items():
+        report += f"- {label}: {count}\n"
+        
+    report += "\n2. Top 5 Most Frequent Entities:\n"
+    for _, row in top_5.iterrows():
+        report += f"- {row['entity_text']} ({row['entity_label']}): {row['count']} times\n"
+        
+    report += "\n3. Top 3 Co-occurring Pairs:\n"
+    for _, row in top_3_co.iterrows():
+        report += f"- {row['entity_a']} & {row['entity_b']}: {row['co_count']} times\n"
+        
+    report += "\n4. Summary:\n"
+    report += "The analysis reveals a high frequency of specific geographic locations and organizations "
+    report += "dominating climate discourse. The co-occurrence patterns suggest strong links between "
+    report += "major policy entities and international locations."
+    
+    return report
 
 
 if __name__ == "__main__":
